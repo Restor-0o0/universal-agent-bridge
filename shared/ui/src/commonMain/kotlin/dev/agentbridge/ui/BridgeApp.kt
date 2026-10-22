@@ -219,6 +219,8 @@ fun BridgeApp(
     val promptDrafts = remember { mutableStateMapOf<String, String>() }
     var bridgeToken by remember { mutableStateOf("") }
     var bridgeKey by remember { mutableStateOf("") }
+    var workspaceId by rememberSaveable { mutableStateOf("default") }
+    var selectedHostId by rememberSaveable { mutableStateOf<String?>(null) }
     var connectionCode by remember { mutableStateOf("") }
     var usbStatus by remember { mutableStateOf<String?>(null) }
     var showExternalSessions by rememberSaveable { mutableStateOf(false) }
@@ -237,6 +239,11 @@ fun BridgeApp(
     LaunchedEffect(remoteState.directoryCurrent) {
         if (workingDirectory.isBlank()) {
             remoteState.directoryCurrent?.let { workingDirectory = it }
+        }
+    }
+    LaunchedEffect(remoteState.hosts) {
+        if (selectedHostId !in remoteState.hosts.map { it.id }) {
+            selectedHostId = remoteState.hosts.singleOrNull()?.id
         }
     }
     val colorScheme = if (darkTheme) BridgeDarkColors else BridgeLightColors
@@ -392,27 +399,45 @@ fun BridgeApp(
                                     value = connectionCode,
                                     onValueChange = { connectionCode = it },
                                     label = { Text(t("Код подключения", "Connection code")) },
-                                    placeholder = { Text("https://agents.example.com|token|key") },
+                                    placeholder = { Text("url|workspace|password|key|host") },
                                     singleLine = true,
                                     modifier = Modifier.fillMaxWidth(),
                                 )
                                 OutlinedButton(
-                                    enabled = connectionCode.count { it == '|' } == 2,
+                                    enabled = connectionCode.count { it == '|' } in setOf(2, 4),
                                     onClick = {
-                                        val parts = connectionCode.trim().split('|', limit = 3)
+                                        val parts = connectionCode.trim().split('|')
                                         if (parts.size == 3) {
                                             url = parts[0].trim()
                                             bridgeToken = parts[1].trim()
                                             bridgeKey = parts[2].trim()
+                                            workspaceId = "default"
+                                            selectedHostId = null
                                             connectionTarget = if (url.startsWith("http://127.0.0.1")) "local" else "vps"
-                                            status = t("Код применён. Нажмите «Подключиться».", "Code applied. Tap Connect.")
+                                            status = t("Код применён. Найдите компьютер.", "Code applied. Find a computer.")
+                                        } else if (parts.size == 5) {
+                                            url = parts[0].trim()
+                                            workspaceId = parts[1].trim()
+                                            bridgeToken = parts[2].trim()
+                                            bridgeKey = parts[3].trim()
+                                            selectedHostId = parts[4].trim()
+                                            connectionTarget = if (url.startsWith("http://127.0.0.1")) "local" else "vps"
+                                            status = t("Код применён. Проверьте список компьютеров.", "Code applied. Check the computer list.")
                                         }
                                     },
                                 ) { Text(t("Применить код", "Apply code")) }
                                 OutlinedTextField(
+                                    value = workspaceId,
+                                    onValueChange = { workspaceId = it.take(64); selectedHostId = null },
+                                    label = { Text(t("Пространство", "Workspace")) },
+                                    placeholder = { Text("alex") },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                                OutlinedTextField(
                                     value = bridgeToken,
                                     onValueChange = { bridgeToken = it },
-                                    label = { Text("Token") },
+                                    label = { Text(t("Пароль Router", "Router password")) },
                                     singleLine = true,
                                     visualTransformation = PasswordVisualTransformation(),
                                     modifier = Modifier.fillMaxWidth(),
@@ -425,11 +450,32 @@ fun BridgeApp(
                                     visualTransformation = PasswordVisualTransformation(),
                                     modifier = Modifier.fillMaxWidth(),
                                 )
+                                OutlinedButton(
+                                    enabled = !remoteState.busy && url.isNotBlank() && workspaceId.isNotBlank() && bridgeToken.length >= 12,
+                                    onClick = {
+                                        selectedHostId = null
+                                        remoteBridge.discoverHosts(url, workspaceId, bridgeToken)
+                                    },
+                                ) { Text(t("Показать доступные компьютеры", "Show available computers")) }
+                                if (remoteState.hosts.isEmpty() && !remoteState.busy) {
+                                    Text(
+                                        t("После проверки здесь появятся Host-компьютеры этого пользователя.", "Host computers in this workspace will appear here after the check."),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                                remoteState.hosts.forEach { host ->
+                                    FilterChip(
+                                        selected = selectedHostId == host.id,
+                                        onClick = { selectedHostId = host.id },
+                                        label = { Text("${host.name} · ${host.id}") },
+                                    )
+                                }
                             }
                             Button(
                                 enabled = !remoteState.connected && !remoteState.busy && url.isNotBlank() &&
-                                    (!remoteBridge.requiresCredentials || (bridgeToken.isNotBlank() && bridgeKey.isNotBlank())),
-                                onClick = { remoteBridge.connect(url, bridgeToken, bridgeKey) },
+                                    (!remoteBridge.requiresCredentials || (bridgeToken.isNotBlank() && bridgeKey.isNotBlank() && selectedHostId != null)),
+                                onClick = { remoteBridge.connect(url, bridgeToken, bridgeKey, workspaceId, selectedHostId) },
                             ) {
                                 Text(
                                     if (remoteState.connected) t("Router запущен", "Router started")

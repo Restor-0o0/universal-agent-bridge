@@ -40,7 +40,7 @@ class RelayVerticalSliceTest {
         application { bridgeRelay(RelayDevelopmentAccess(token, setOf("host", "desktop"))) }
         val http = createClient { install(WebSockets) }
         val hostConnection = EncryptedRelayConnection(
-            http, "http://localhost", token, "host", DevelopmentPresharedCipher(key),
+            http, "http://localhost", token, "host", DevelopmentPresharedCipher(key), deviceRole = "host",
         )
         val desktopConnection = EncryptedRelayConnection(
             http, "http://localhost", token, "desktop", DevelopmentPresharedCipher(key),

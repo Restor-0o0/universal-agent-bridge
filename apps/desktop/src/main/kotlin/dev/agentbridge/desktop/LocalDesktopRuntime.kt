@@ -96,7 +96,7 @@ class LocalDesktopRuntime private constructor(
             val keyText = Base64.getUrlEncoder().withoutPadding().encodeToString(key)
             val relay = RelayEngine(
                 RelayConfig(port = port),
-                RelayDevelopmentAccess(token, setOf("host", "desktop", "android")),
+                RelayDevelopmentAccess(token, emptySet()),
             )
             relay.start()
             val hostHttp = HttpClient(CIO) {
@@ -110,6 +110,7 @@ class LocalDesktopRuntime private constructor(
                     token,
                     "host",
                     DevelopmentPresharedCipher(key),
+                    deviceRole = "host",
                 ).also { it.connect() }
                 val host = ManagedAgentHost(
                     HarnessRegistry(listOf(CodexHarnessProvider(), ClaudeHarnessProvider(), OpenCodeHarnessProvider())),

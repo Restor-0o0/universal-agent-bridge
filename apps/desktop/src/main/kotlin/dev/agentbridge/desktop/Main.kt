@@ -49,7 +49,13 @@ fun main(args: Array<String>) {
     val remoteBridge = localRuntime?.remoteBridge ?: if (dev) {
         val token = System.getenv("AGENT_BRIDGE_DEV_TOKEN")
         val key = System.getenv("AGENT_BRIDGE_DEV_KEY")
-        if (token != null && key != null) DesktopRemoteBridge(http, token, key) else null
+        if (token != null && key != null) DesktopRemoteBridge(
+            http,
+            token,
+            key,
+            defaultWorkspaceId = System.getenv("AGENT_BRIDGE_WORKSPACE") ?: "default",
+            defaultHostId = System.getenv("AGENT_BRIDGE_HOST_ID") ?: "host",
+        ) else null
     } else null
     application {
         DisposableEffect(Unit) {

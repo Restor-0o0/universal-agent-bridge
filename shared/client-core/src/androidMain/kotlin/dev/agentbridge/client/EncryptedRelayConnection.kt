@@ -36,12 +36,14 @@ class EncryptedRelayConnection(
     val deviceId: String,
     private val cipher: EnvelopeCipher,
     private val keyEpoch: Int = 1,
+    private val workspaceId: String = "default",
+    private val deviceRole: String = "client",
 ) : AutoCloseable {
     private val endpoint = relayBaseUrl(baseUrl, allowLoopbackHttp = true)
         .toString()
         .trimEnd('/')
         .let { if (it.startsWith("https://")) "wss://${it.removePrefix("https://")}" else "ws://${it.removePrefix("http://")}" } +
-        "/v1/events?deviceId=$deviceId"
+        "/v1/events?workspaceId=$workspaceId&deviceId=$deviceId&role=$deviceRole"
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val received = Channel<RoutedBridgePayload>(capacity = 64)
     private val writes = Mutex()

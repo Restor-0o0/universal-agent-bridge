@@ -26,17 +26,28 @@ function Read-SecretConfig {
     Write-Host 'First connection to your Agent Bridge VPS.' -ForegroundColor Cyan
     $values = @{
         URL = (Read-Host 'Relay HTTPS URL, for example https://agents.example.com').TrimEnd('/')
-        TOKEN = (Read-Host 'Token').Trim()
+        WORKSPACE = (Read-Host 'Workspace name, for example alex').Trim()
+        PASSWORD = (Read-Host 'Router password').Trim()
         KEY = (Read-Host 'Encryption key').Trim()
+        HOST_ID = ((Read-Host "Computer ID [$env:COMPUTERNAME]").Trim())
     }
+    if ([string]::IsNullOrWhiteSpace($values.HOST_ID)) { $values.HOST_ID = $env:COMPUTERNAME }
     if ($values.URL -notmatch '^https://[^/]+$') { throw 'Enter a root HTTPS URL without a path.' }
-    if ($values.TOKEN.Length -lt 32) { throw 'Token must contain at least 32 characters.' }
+    if ($values.WORKSPACE -notmatch '^[A-Za-z0-9._-]{1,64}$') { throw 'Workspace contains invalid characters.' }
+    if ($values.HOST_ID -notmatch '^[A-Za-z0-9._-]{1,64}$') { throw 'Computer ID contains invalid characters.' }
+    if ($values.PASSWORD.Length -lt 12) { throw 'Router password must contain at least 12 characters.' }
     try { $decoded = [Convert]::FromBase64String(($values.KEY.Replace('-', '+').Replace('_', '/') + '===').Substring(0, [Math]::Ceiling($values.KEY.Length / 4.0) * 4)) } catch { throw 'Encryption key must be base64url.' }
     if ($decoded.Length -ne 32) { throw 'Encryption key must decode to exactly 32 bytes.' }
     New-Item -ItemType Directory -Force -Path $configDirectory | Out-Null
     [IO.File]::WriteAllLines(
         $configPath,
-        [string[]]@("URL=$($values.URL)", "TOKEN=$($values.TOKEN)", "KEY=$($values.KEY)"),
+        [string[]]@(
+            "URL=$($values.URL)",
+            "WORKSPACE=$($values.WORKSPACE)",
+            "PASSWORD=$($values.PASSWORD)",
+            "KEY=$($values.KEY)",
+            "HOST_ID=$($values.HOST_ID)"
+        ),
         [Text.UTF8Encoding]::new($false)
     )
     Write-Host "Settings saved to: $configPath" -ForegroundColor DarkGray
@@ -44,9 +55,14 @@ function Read-SecretConfig {
 }
 
 $config = Read-SecretConfig
+$workspace = if ($config.WORKSPACE) { $config.WORKSPACE } else { 'default' }
+$password = if ($config.PASSWORD) { $config.PASSWORD } else { $config.TOKEN }
+$hostId = if ($config.HOST_ID) { $config.HOST_ID } else { $env:COMPUTERNAME }
 $env:AGENT_BRIDGE_RELAY_URL = $config.URL
-$env:AGENT_BRIDGE_DEV_TOKEN = $config.TOKEN
+$env:AGENT_BRIDGE_DEV_TOKEN = $password
 $env:AGENT_BRIDGE_DEV_KEY = $config.KEY
+$env:AGENT_BRIDGE_WORKSPACE = $workspace
+$env:AGENT_BRIDGE_HOST_ID = $hostId
 $env:JAVA_HOME = Join-Path $bundleRoot 'desktop\runtime'
 $env:PATH = "$env:JAVA_HOME\bin;$env:PATH"
 $hostLog = Join-Path $configDirectory 'vps-host.log'
@@ -72,7 +88,7 @@ try {
         Write-Host 'Client-only mode: using the Host already connected to the VPS.' -ForegroundColor Green
     }
     Write-Host 'Phone connection code:' -ForegroundColor Cyan
-    Write-Host "$($config.URL)|$($config.TOKEN)|$($config.KEY)"
+    Write-Host "$($config.URL)|$workspace|$password|$($config.KEY)|$hostId"
     Write-Host 'Use -Reset to change the VPS or secrets; use -ClientOnly when Host runs on the VPS.' -ForegroundColor DarkGray
 
     $desktop = Start-Process -FilePath (Join-Path $bundleRoot 'desktop\AgentBridge.exe') `

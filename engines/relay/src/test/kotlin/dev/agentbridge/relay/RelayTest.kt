@@ -93,4 +93,70 @@ class RelayTest {
         val session = socketClient.webSocketSession { url("/v1/events?deviceId=host") }
         assertEquals(CloseReason.Codes.VIOLATED_POLICY.code, session.closeReason.await()?.code)
     }
+
+    @Test fun workspacesHaveSeparatePasswordsHostListsAndRouting() = testApplication {
+        val alicePassword = "alice-password-0123456789"
+        val bobPassword = "bob-password-012345678901"
+        application {
+            bridgeRelay(
+                RelayDevelopmentAccess(
+                    mapOf(
+                        "alice" to RelayWorkspaceAccess(alicePassword),
+                        "bob" to RelayWorkspaceAccess(bobPassword),
+                    ),
+                ),
+            )
+        }
+        val socketClient = createClient { install(WebSockets) }
+        val aliceHost = socketClient.webSocketSession {
+            url("/v1/events?workspaceId=alice&deviceId=laptop&role=host")
+            header(HttpHeaders.Authorization, "Bearer $alicePassword")
+        }
+        val bobHost = socketClient.webSocketSession {
+            url("/v1/events?workspaceId=bob&deviceId=laptop&role=host")
+            header(HttpHeaders.Authorization, "Bearer $bobPassword")
+        }
+        val aliceClient = socketClient.webSocketSession {
+            url("/v1/events?workspaceId=alice&deviceId=phone&role=client")
+            header(HttpHeaders.Authorization, "Bearer $alicePassword")
+        }
+        val bobClient = socketClient.webSocketSession {
+            url("/v1/events?workspaceId=bob&deviceId=phone&role=client")
+            header(HttpHeaders.Authorization, "Bearer $bobPassword")
+        }
+
+        val aliceHostsResponse = client.get("/v1/hosts?workspaceId=alice") {
+            header(HttpHeaders.Authorization, "Bearer $alicePassword")
+        }
+        assertEquals(HttpStatusCode.OK, aliceHostsResponse.status)
+        val aliceHosts = BridgeJson.decodeFromString<RelayHostList>(aliceHostsResponse.bodyAsText())
+        assertEquals(listOf("laptop"), aliceHosts.hosts.map(WireHost::id))
+        assertEquals(
+            HttpStatusCode.Unauthorized,
+            client.get("/v1/hosts?workspaceId=alice") {
+                header(HttpHeaders.Authorization, "Bearer $bobPassword")
+            }.status,
+        )
+
+        fun envelope(sender: String, text: String) = EventEnvelope(
+            eventId = "event-$text",
+            kind = "session.event",
+            senderDeviceId = sender,
+            recipientDeviceId = "laptop",
+            sessionId = "control",
+            seq = 1,
+            createdAt = "2026-10-22T00:00:00Z",
+            ciphertext = text,
+            nonce = "nonce-$text",
+            keyEpoch = 1,
+        )
+        aliceClient.send(Frame.Text(BridgeJson.encodeToString(envelope("phone", "alice"))))
+        bobClient.send(Frame.Text(BridgeJson.encodeToString(envelope("phone", "bob"))))
+        val aliceReceived = BridgeJson.decodeFromString<EventEnvelope>((aliceHost.incoming.receive() as Frame.Text).readText())
+        val bobReceived = BridgeJson.decodeFromString<EventEnvelope>((bobHost.incoming.receive() as Frame.Text).readText())
+        assertEquals("alice", aliceReceived.ciphertext)
+        assertEquals("bob", bobReceived.ciphertext)
+
+        aliceClient.close(); bobClient.close(); aliceHost.close(); bobHost.close()
+    }
 }

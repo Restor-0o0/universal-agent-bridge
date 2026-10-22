@@ -1,6 +1,7 @@
 package dev.agentbridge.desktop
 
 import dev.agentbridge.client.EncryptedRelayConnection
+import dev.agentbridge.client.RelayHostDirectory
 import dev.agentbridge.crypto.DevelopmentPresharedCipher
 import dev.agentbridge.protocol.*
 import dev.agentbridge.ui.*
@@ -14,7 +15,13 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.prefs.Preferences
 
-class DesktopRemoteBridge(private val http: HttpClient, private val token: String, keyBase64Url: String) : RemoteBridgeActions, AutoCloseable {
+class DesktopRemoteBridge(
+    private val http: HttpClient,
+    private val token: String,
+    keyBase64Url: String,
+    private val defaultWorkspaceId: String = "default",
+    private val defaultHostId: String = "host",
+) : RemoteBridgeActions, AutoCloseable {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val key = Base64.getUrlDecoder().decode(keyBase64Url)
     private val preferences = Preferences.userNodeForPackage(DesktopRemoteBridge::class.java)
@@ -24,22 +31,48 @@ class DesktopRemoteBridge(private val http: HttpClient, private val token: Strin
     private val pendingClears = ConcurrentHashMap.newKeySet<String>()
     private val autoApprovals = ConcurrentHashMap.newKeySet<String>()
     private var connection: EncryptedRelayConnection? = null
+    private var targetHostId: String = defaultHostId
+    private val deviceId = "desktop-${UUID.randomUUID().toString().take(8)}"
     override val state: StateFlow<RemoteBridgeState> = mutableState.asStateFlow()
 
-    override fun connect(relayUrl: String, bearerToken: String?, keyBase64Url: String?) {
+    override fun discoverHosts(relayUrl: String, workspaceId: String, password: String) {
+        mutableState.update { it.copy(busy = true, error = null, workspaceId = workspaceId, hosts = emptyList()) }
+        scope.launch {
+            runCatching { RelayHostDirectory(http, true).list(relayUrl, workspaceId, password) }
+                .onSuccess { result -> mutableState.update { it.copy(busy = false, hosts = result.hosts) } }
+                .onFailure(::fail)
+        }
+    }
+
+    override fun connect(
+        relayUrl: String,
+        bearerToken: String?,
+        keyBase64Url: String?,
+        workspaceId: String,
+        hostId: String?,
+    ) {
         if (connection != null) return
+        val effectiveWorkspaceId = if (workspaceId == "default") defaultWorkspaceId else workspaceId
+        val effectiveToken = bearerToken?.takeIf(String::isNotBlank) ?: token
+        val effectiveKey = keyBase64Url?.takeIf(String::isNotBlank)?.let { Base64.getUrlDecoder().decode(it) } ?: key
+        targetHostId = hostId ?: mutableState.value.hosts.singleOrNull()?.id ?: defaultHostId
         mutableState.update { it.copy(busy = true, error = null) }
         scope.launch {
-            runCatching { EncryptedRelayConnection(http, relayUrl, token, "desktop", DevelopmentPresharedCipher(key)).also { it.connect() } }
+            runCatching {
+                EncryptedRelayConnection(
+                    http, relayUrl, effectiveToken, deviceId, DevelopmentPresharedCipher(effectiveKey),
+                    workspaceId = effectiveWorkspaceId,
+                ).also { it.connect() }
+            }
                 .onSuccess { connected ->
                     connection = connected
-                    mutableState.update { it.copy(connected = true, busy = false) }
+                    mutableState.update { it.copy(connected = true, busy = false, workspaceId = effectiveWorkspaceId, selectedHostId = targetHostId) }
                     scope.launch { collectIncoming(connected) }
                     migrateLocalTabs(connected)
-                    connected.send("host", "control", BridgePayload.ListSavedTabs(UUID.randomUUID().toString()))
-                    connected.send("host", "control", BridgePayload.ListAgents(UUID.randomUUID().toString()))
-                    connected.send("host", "control", BridgePayload.ListDirectories(UUID.randomUUID().toString()))
-                    connected.send("host", "control", BridgePayload.ListExternalSessions(UUID.randomUUID().toString()))
+                    connected.send(targetHostId, "control", BridgePayload.ListSavedTabs(UUID.randomUUID().toString()))
+                    connected.send(targetHostId, "control", BridgePayload.ListAgents(UUID.randomUUID().toString()))
+                    connected.send(targetHostId, "control", BridgePayload.ListDirectories(UUID.randomUUID().toString()))
+                    connected.send(targetHostId, "control", BridgePayload.ListExternalSessions(UUID.randomUUID().toString()))
                 }.onFailure(::fail)
         }
     }
@@ -192,7 +225,7 @@ class DesktopRemoteBridge(private val http: HttpClient, private val token: Strin
 
     private fun send(sessionId: String, payload: BridgePayload) {
         val active = connection ?: return fail(IllegalStateException("Dev bridge is not connected"))
-        scope.launch { runCatching { active.send("host", sessionId, payload) }.onFailure(::fail) }
+        scope.launch { runCatching { active.send(targetHostId, sessionId, payload) }.onFailure(::fail) }
     }
 
     private suspend fun collectIncoming(active: EncryptedRelayConnection) {
@@ -308,7 +341,7 @@ class DesktopRemoteBridge(private val http: HttpClient, private val token: Strin
     private suspend fun migrateLocalTabs(connected: EncryptedRelayConnection) {
         if (preferences.getBoolean(HOST_MIGRATION_KEY, false)) return
         mutableState.value.sessions.forEach { tab ->
-            connected.send("host", "control", BridgePayload.SaveTab(UUID.randomUUID().toString(), tab.toSavedTab()))
+            connected.send(targetHostId, "control", BridgePayload.SaveTab(UUID.randomUUID().toString(), tab.toSavedTab()))
         }
         preferences.putBoolean(HOST_MIGRATION_KEY, true)
     }

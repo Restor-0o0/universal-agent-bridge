@@ -17,6 +17,19 @@ data class RelayInfo(
 )
 
 @Serializable
+data class WireHost(
+    val id: String,
+    val name: String,
+    val connectedAtMillis: Long,
+)
+
+@Serializable
+data class RelayHostList(
+    val workspaceId: String,
+    val hosts: List<WireHost>,
+)
+
+@Serializable
 data class SavedAgentTab(
     val tabId: String,
     val title: String,

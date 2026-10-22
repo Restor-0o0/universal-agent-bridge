@@ -3,6 +3,7 @@ package dev.agentbridge.ui
 import dev.agentbridge.protocol.WireAgent
 import dev.agentbridge.protocol.WireDirectory
 import dev.agentbridge.protocol.WireExternalSession
+import dev.agentbridge.protocol.WireHost
 import kotlinx.coroutines.flow.StateFlow
 
 data class RemoteApprovalView(
@@ -42,6 +43,9 @@ data class RemoteSessionView(
 
 data class RemoteBridgeState(
     val connected: Boolean = false,
+    val workspaceId: String = "default",
+    val hosts: List<WireHost> = emptyList(),
+    val selectedHostId: String? = null,
     val agents: List<WireAgent> = emptyList(),
     val directoryCurrent: String? = null,
     val directoryParent: String? = null,
@@ -64,7 +68,14 @@ data class RemoteBridgeState(
 interface RemoteBridgeActions {
     val state: StateFlow<RemoteBridgeState>
     val requiresCredentials: Boolean get() = false
-    fun connect(relayUrl: String, bearerToken: String? = null, keyBase64Url: String? = null)
+    fun discoverHosts(relayUrl: String, workspaceId: String, password: String)
+    fun connect(
+        relayUrl: String,
+        bearerToken: String? = null,
+        keyBase64Url: String? = null,
+        workspaceId: String = "default",
+        hostId: String? = null,
+    )
     fun browseDirectories(parent: String? = null)
     fun refreshExternalSessions()
     fun watchExternalSession(session: WireExternalSession)

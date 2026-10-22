@@ -59,6 +59,14 @@ private suspend fun connectDevelopmentRelay(url: String) {
     val key = requireNotNull(System.getenv("AGENT_BRIDGE_DEV_KEY")) {
         "AGENT_BRIDGE_DEV_KEY is required (base64url 32-byte key)"
     }.let { Base64.getUrlDecoder().decode(it) }
+    val workspaceId = System.getenv("AGENT_BRIDGE_WORKSPACE")?.takeIf(String::isNotBlank) ?: "default"
+    val hostId = (System.getenv("AGENT_BRIDGE_HOST_ID")
+        ?: System.getenv("COMPUTERNAME")
+        ?: System.getenv("HOSTNAME")
+        ?: "host")
+        .take(64)
+        .map { if (it.isLetterOrDigit() || it in "-_.") it else '-' }
+        .joinToString("")
     val http = HttpClient(CIO) {
         install(WebSockets)
         install(HttpTimeout) {
@@ -70,8 +78,10 @@ private suspend fun connectDevelopmentRelay(url: String) {
         http = http,
         baseUrl = url,
         bearerToken = token,
-        deviceId = "host",
+        deviceId = hostId,
         cipher = DevelopmentPresharedCipher(key),
+        workspaceId = workspaceId,
+        deviceRole = "host",
     )
     connection.connect()
     val registry = HarnessRegistry(
@@ -82,7 +92,7 @@ private suspend fun connectDevelopmentRelay(url: String) {
         connection.close()
         http.close()
     })
-    println("Agent Bridge Host connected to local development Relay; harnesses are auto-detected.")
+    println("Agent Bridge Host '$hostId' connected to Router workspace '$workspaceId'; harnesses are auto-detected.")
     try {
         host.run()
     } finally {

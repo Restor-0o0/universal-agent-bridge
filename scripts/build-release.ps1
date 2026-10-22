@@ -106,6 +106,7 @@ Copy-Item -LiteralPath (Join-Path $projectRoot 'deployment\vps\agent-bridge-rela
 Copy-Item -LiteralPath (Join-Path $projectRoot 'deployment\vps\Caddyfile.example') -Destination $resolvedRelayVpsStage
 Copy-Item -LiteralPath (Join-Path $projectRoot 'deployment\vps\Caddyfile.restorkava.example') -Destination $resolvedRelayVpsStage
 Copy-Item -LiteralPath (Join-Path $projectRoot 'deployment\vps\install-relay.sh') -Destination $resolvedRelayVpsStage
+Copy-Item -LiteralPath (Join-Path $projectRoot 'deployment\vps\add-workspace.sh') -Destination $resolvedRelayVpsStage
 Copy-Item -LiteralPath (Join-Path $projectRoot 'deployment\vps\install-from-git.sh') -Destination $resolvedRelayVpsStage
 Compress-Archive -LiteralPath $resolvedRelayVpsStage `
     -DestinationPath (Join-Path $dist 'AgentBridge-Relay-JVM-0.1.0.zip') `

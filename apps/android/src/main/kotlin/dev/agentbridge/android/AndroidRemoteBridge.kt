@@ -3,6 +3,7 @@ package dev.agentbridge.android
 import android.content.Context
 import android.content.Intent
 import dev.agentbridge.client.EncryptedRelayConnection
+import dev.agentbridge.client.RelayHostDirectory
 import dev.agentbridge.crypto.DevelopmentPresharedCipher
 import dev.agentbridge.protocol.*
 import dev.agentbridge.ui.*
@@ -36,28 +37,53 @@ class AndroidRemoteBridge(context: Context) : RemoteBridgeActions, AutoCloseable
     private val reminderJobs = ConcurrentHashMap<String, Job>()
     private val helpSessions = ConcurrentHashMap<String, String>()
     private var connection: EncryptedRelayConnection? = null
+    private var targetHostId: String = "host"
+    private val deviceId = preferences.getString(DEVICE_ID_KEY, null) ?: "android-${UUID.randomUUID().toString().take(8)}".also {
+        preferences.edit().putString(DEVICE_ID_KEY, it).apply()
+    }
     override val state: StateFlow<RemoteBridgeState> = mutableState.asStateFlow()
     override val requiresCredentials = true
 
     init { active = this }
 
-    override fun connect(relayUrl: String, bearerToken: String?, keyBase64Url: String?) {
+    override fun discoverHosts(relayUrl: String, workspaceId: String, password: String) {
+        mutableState.update { it.copy(busy = true, error = null, workspaceId = workspaceId, hosts = emptyList()) }
+        scope.launch {
+            runCatching { RelayHostDirectory(http, true).list(relayUrl, workspaceId, password) }
+                .onSuccess { result -> mutableState.update { it.copy(busy = false, hosts = result.hosts) } }
+                .onFailure(::fail)
+        }
+    }
+
+    override fun connect(
+        relayUrl: String,
+        bearerToken: String?,
+        keyBase64Url: String?,
+        workspaceId: String,
+        hostId: String?,
+    ) {
         if (connection != null) return
-        val token = bearerToken?.takeIf(String::isNotBlank) ?: return fail(IllegalArgumentException("Укажите dev token"))
-        val keyText = keyBase64Url?.takeIf(String::isNotBlank) ?: return fail(IllegalArgumentException("Укажите dev key"))
+        val token = bearerToken?.takeIf(String::isNotBlank) ?: return fail(IllegalArgumentException("Укажите пароль Router"))
+        val keyText = keyBase64Url?.takeIf(String::isNotBlank) ?: return fail(IllegalArgumentException("Укажите ключ шифрования"))
+        targetHostId = hostId ?: mutableState.value.hosts.singleOrNull()?.id ?: "host"
         mutableState.update { it.copy(busy = true, error = null) }
         scope.launch {
-            runCatching { EncryptedRelayConnection(http, relayUrl, token, "android", DevelopmentPresharedCipher(Base64.getUrlDecoder().decode(keyText))).also { it.connect() } }
+            runCatching {
+                EncryptedRelayConnection(
+                    http, relayUrl, token, deviceId, DevelopmentPresharedCipher(Base64.getUrlDecoder().decode(keyText)),
+                    workspaceId = workspaceId,
+                ).also { it.connect() }
+            }
                 .onSuccess { connected ->
                     connection = connected
                     appContext.startForegroundService(Intent(appContext, RelayMonitorService::class.java))
-                    mutableState.update { it.copy(connected = true, busy = false) }
+                    mutableState.update { it.copy(connected = true, busy = false, workspaceId = workspaceId, selectedHostId = targetHostId) }
                     scope.launch { collectIncoming(connected) }
                     migrateLocalTabs(connected)
-                    connected.send("host", "control", BridgePayload.ListSavedTabs(UUID.randomUUID().toString()))
-                    connected.send("host", "control", BridgePayload.ListAgents(UUID.randomUUID().toString()))
-                    connected.send("host", "control", BridgePayload.ListDirectories(UUID.randomUUID().toString()))
-                    connected.send("host", "control", BridgePayload.ListExternalSessions(UUID.randomUUID().toString()))
+                    connected.send(targetHostId, "control", BridgePayload.ListSavedTabs(UUID.randomUUID().toString()))
+                    connected.send(targetHostId, "control", BridgePayload.ListAgents(UUID.randomUUID().toString()))
+                    connected.send(targetHostId, "control", BridgePayload.ListDirectories(UUID.randomUUID().toString()))
+                    connected.send(targetHostId, "control", BridgePayload.ListExternalSessions(UUID.randomUUID().toString()))
                 }.onFailure(::fail)
         }
     }
@@ -212,7 +238,7 @@ class AndroidRemoteBridge(context: Context) : RemoteBridgeActions, AutoCloseable
 
     private fun send(sessionId: String, payload: BridgePayload) {
         val activeConnection = connection ?: return fail(IllegalStateException("Мост не подключён"))
-        scope.launch { runCatching { activeConnection.send("host", sessionId, payload) }.onFailure(::fail) }
+        scope.launch { runCatching { activeConnection.send(targetHostId, sessionId, payload) }.onFailure(::fail) }
     }
 
     private suspend fun collectIncoming(activeConnection: EncryptedRelayConnection) {
@@ -354,7 +380,7 @@ class AndroidRemoteBridge(context: Context) : RemoteBridgeActions, AutoCloseable
     private suspend fun migrateLocalTabs(connected: EncryptedRelayConnection) {
         if (preferences.getBoolean(HOST_MIGRATION_KEY, false)) return
         mutableState.value.sessions.forEach { tab ->
-            connected.send("host", "control", BridgePayload.SaveTab(UUID.randomUUID().toString(), tab.toSavedTab()))
+            connected.send(targetHostId, "control", BridgePayload.SaveTab(UUID.randomUUID().toString(), tab.toSavedTab()))
         }
         preferences.edit().putBoolean(HOST_MIGRATION_KEY, true).apply()
     }
@@ -404,6 +430,7 @@ class AndroidRemoteBridge(context: Context) : RemoteBridgeActions, AutoCloseable
     companion object {
         private const val TABS_KEY = "saved_agent_tabs_v1"
         private const val HOST_MIGRATION_KEY = "saved_agent_tabs_host_migrated_v1"
+        private const val DEVICE_ID_KEY = "router_device_id_v1"
         private const val REMINDER_INTERVAL_MILLIS = 5 * 60 * 1000L
         @Volatile var active: AndroidRemoteBridge? = null
             private set
