@@ -1,0 +1,22 @@
+[Unit]
+Description=Universal Agent Bridge Relay
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=agent-bridge
+Group=agent-bridge
+WorkingDirectory=/opt/agent-bridge/relay
+EnvironmentFile=/etc/agent-bridge/relay.env
+ExecStart=/opt/agent-bridge/relay/bin/relayHeadless --dev 8787
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/agent-bridge
+
+[Install]
+WantedBy=multi-user.target

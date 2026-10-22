@@ -1,0 +1,13 @@
+.gradle/
+.kotlin/
+.idea/
+**/build/
+local.properties
+*.iml
+*.jks
+*.keystore
+.env
+.dev/
+dist/
+resume-codex.cmd
+resume-codex.ps1
