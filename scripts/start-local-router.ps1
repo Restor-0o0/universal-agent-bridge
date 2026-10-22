@@ -21,11 +21,15 @@ if (-not $SkipBuild) {
     if ($LASTEXITCODE -ne 0) { throw "Gradle build failed with exit code $LASTEXITCODE" }
 }
 
-$env:AGENT_BRIDGE_DEV_TOKEN = [Convert]::ToHexString(
-    [Security.Cryptography.RandomNumberGenerator]::GetBytes(32)
-).ToLowerInvariant()
-$rawKey = [Security.Cryptography.RandomNumberGenerator]::GetBytes(32)
+$random = [Security.Cryptography.RandomNumberGenerator]::Create()
+$tokenBytes = New-Object byte[] 32
+$rawKey = New-Object byte[] 32
+$random.GetBytes($tokenBytes)
+$random.GetBytes($rawKey)
+$random.Dispose()
+$env:AGENT_BRIDGE_DEV_TOKEN = -join ($tokenBytes | ForEach-Object { $_.ToString('x2') })
 $env:AGENT_BRIDGE_DEV_KEY = [Convert]::ToBase64String($rawKey).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+$env:AGENT_BRIDGE_HOST_ID = 'local-host'
 
 $relayExecutable = Join-Path $projectRoot 'apps\relay\build\install\relayHeadless\bin\relayHeadless.bat'
 $hostExecutable = Join-Path $projectRoot 'apps\host\build\install\hostApp\bin\hostApp.bat'
@@ -77,7 +81,8 @@ try {
             & $adb.Source shell am start -n 'dev.agentbridge.android/.MainActivity' `
                 --es agent_bridge_url 'http://127.0.0.1:8787' `
                 --es agent_bridge_token $env:AGENT_BRIDGE_DEV_TOKEN `
-                --es agent_bridge_key $env:AGENT_BRIDGE_DEV_KEY | Out-Null
+                --es agent_bridge_key $env:AGENT_BRIDGE_DEV_KEY `
+                --es agent_bridge_host $env:AGENT_BRIDGE_HOST_ID | Out-Null
             if ($LASTEXITCODE -ne 0) { throw "Android app launch failed with exit code $LASTEXITCODE" }
             Write-Host 'Android APK installed, local route configured, and the bridge connected automatically.'
         }

@@ -275,7 +275,7 @@ class AndroidRemoteBridge(context: Context) : RemoteBridgeActions, AutoCloseable
                 watchedExternalSession = null,
                 externalTranscript = "",
             ) }
-            appContext.stopService(Intent(appContext, RelayMonitorService::class.java))
+            RelayMonitorService.stopAfterDisconnect(appContext)
         }
         failure?.let(::fail)
     }
@@ -423,7 +423,7 @@ class AndroidRemoteBridge(context: Context) : RemoteBridgeActions, AutoCloseable
     override fun close() {
         clearHelpNotifications(); connection?.close(); connection = null
         mutableState.update { it.copy(connected = false, busy = false) }
-        appContext.stopService(Intent(appContext, RelayMonitorService::class.java)); http.close(); scope.cancel()
+        RelayMonitorService.stopAfterDisconnect(appContext); http.close(); scope.cancel()
         if (active === this) active = null
     }
 

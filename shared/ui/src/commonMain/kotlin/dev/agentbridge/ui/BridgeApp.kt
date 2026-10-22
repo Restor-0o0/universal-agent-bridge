@@ -159,20 +159,28 @@ private fun BridgeHeaderContent(
         }
     }
     @Composable
-    fun Controls() {
+    fun Controls(compact: Boolean = false) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            FilterChip(selected = !english, onClick = { onLanguage(false) }, label = { Text("RU") })
-            FilterChip(selected = english, onClick = { onLanguage(true) }, label = { Text("EN") })
+            if (compact) {
+                TextButton(onClick = { onLanguage(!english) }) { Text(if (english) "EN" else "RU") }
+            } else {
+                FilterChip(selected = !english, onClick = { onLanguage(false) }, label = { Text("RU") })
+                FilterChip(selected = english, onClick = { onLanguage(true) }, label = { Text("EN") })
+            }
             TextButton(onClick = onToggleTheme) {
                 Text(if (darkTheme) "☀" else "☾", fontSize = 20.sp)
             }
         }
     }
-    BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp)) {
+    BoxWithConstraints(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 10.dp)) {
         if (maxWidth < 520.dp) {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Brand()
-                Controls()
+                Controls(compact = true)
             }
         } else {
             Row(
@@ -224,6 +232,8 @@ fun BridgeApp(
     var connectionCode by remember { mutableStateOf("") }
     var usbStatus by remember { mutableStateOf<String?>(null) }
     var showExternalSessions by rememberSaveable { mutableStateOf(false) }
+    var showManualConnection by rememberSaveable { mutableStateOf(false) }
+    var screenSection by rememberSaveable { mutableStateOf("work") }
     var connectionTarget by rememberSaveable {
         mutableStateOf(if (url.startsWith("http://127.0.0.1")) "local" else "vps")
     }
@@ -262,8 +272,8 @@ fun BridgeApp(
             ) {
             Column(
                 Modifier.align(Alignment.TopCenter).fillMaxWidth().widthIn(max = 1080.dp)
-                    .verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 18.dp),
-                verticalArrangement = Arrangement.spacedBy(18.dp),
+                    .verticalScroll(rememberScrollState()).padding(horizontal = 12.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
@@ -282,18 +292,24 @@ fun BridgeApp(
                         onToggleTheme = { darkTheme = !darkTheme },
                     )
                 }
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text(
-                        t("Ваши агенты — в одном месте", "All your agents in one place"),
-                        style = MaterialTheme.typography.headlineLarge,
-                    )
-                    Text(
-                        t(
-                            "Запускайте Codex, Claude Code и OpenCode локально или управляйте ими через свой VPS.",
-                            "Run Codex, Claude Code and OpenCode locally or control them through your own VPS.",
-                        ),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                if (!remoteState.connected) BoxWithConstraints(Modifier.fillMaxWidth()) {
+                    val compactHero = maxWidth < 520.dp
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            t("Ваши агенты — в одном месте", "All your agents in one place"),
+                            style = if (compactHero) MaterialTheme.typography.headlineSmall
+                            else MaterialTheme.typography.headlineLarge,
+                        )
+                        Text(
+                            t(
+                                "Запускайте Codex, Claude Code и OpenCode локально или управляйте ими через свой VPS.",
+                                "Run Codex, Claude Code and OpenCode locally or control them through your own VPS.",
+                            ),
+                            style = if (compactHero) MaterialTheme.typography.bodyMedium
+                            else MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
                 Card(
                     modifier = Modifier.fillMaxWidth(),
@@ -307,7 +323,7 @@ fun BridgeApp(
                         else MaterialTheme.colorScheme.outlineVariant,
                     ),
                 ) {
-                    Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Text(
                             if (embeddedLocalRouter && remoteState.connected) t("Один Router работает", "One Router is running")
                             else if (embeddedLocalRouter) t("Запустить на этом компьютере", "Start on this computer")
@@ -365,34 +381,6 @@ fun BridgeApp(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
-                        if (!embeddedLocalRouter) {
-                            OutlinedTextField(
-                                value = url, onValueChange = { url = it; status = null }, singleLine = true,
-                                enabled = !busy, label = { Text("Relay URL") },
-                                placeholder = { Text("https://agents.example.com") }, modifier = Modifier.fillMaxWidth(),
-                            )
-                            OutlinedButton(
-                                enabled = !busy && url.isNotBlank(),
-                                onClick = {
-                                    busy = true
-                                    status = null
-                                    scope.launch {
-                                        try {
-                                            val info = discovery.inspect(url)
-                                            status = t(
-                                                "Relay доступен · протокол ${info.protocolVersions.joinToString()} · ${info.stage}. Привязка устройства ещё не реализована.",
-                                                "Relay reachable · protocol ${info.protocolVersions.joinToString()} · ${info.stage}. Device pairing is not implemented yet.",
-                                            )
-                                        } catch (e: CancellationException) {
-                                            throw e
-                                        } catch (e: Exception) {
-                                            status = t("Проверка не пройдена: ", "Check failed: ") +
-                                                (e.message?.take(240) ?: t("ошибка соединения", "connection error"))
-                                        } finally { busy = false }
-                                    }
-                                },
-                            ) { Text(if (busy) t("Проверяем…", "Checking…") else t("Проверить адрес", "Check address")) }
-                        }
                         if (remoteBridge != null) {
                             if (remoteBridge.requiresCredentials && !remoteState.connected) {
                                 OutlinedTextField(
@@ -424,32 +412,69 @@ fun BridgeApp(
                                             connectionTarget = if (url.startsWith("http://127.0.0.1")) "local" else "vps"
                                             status = t("Код применён. Проверьте список компьютеров.", "Code applied. Check the computer list.")
                                         }
+                                        if (parts.size == 3 || parts.size == 5) {
+                                            remoteBridge.discoverHosts(url, workspaceId, bridgeToken)
+                                        }
                                     },
                                 ) { Text(t("Применить код", "Apply code")) }
-                                OutlinedTextField(
-                                    value = workspaceId,
-                                    onValueChange = { workspaceId = it.take(64); selectedHostId = null },
-                                    label = { Text(t("Пространство", "Workspace")) },
-                                    placeholder = { Text("alex") },
-                                    singleLine = true,
-                                    modifier = Modifier.fillMaxWidth(),
-                                )
-                                OutlinedTextField(
-                                    value = bridgeToken,
-                                    onValueChange = { bridgeToken = it },
-                                    label = { Text(t("Пароль Router", "Router password")) },
-                                    singleLine = true,
-                                    visualTransformation = PasswordVisualTransformation(),
-                                    modifier = Modifier.fillMaxWidth(),
-                                )
-                                OutlinedTextField(
-                                    value = bridgeKey,
-                                    onValueChange = { bridgeKey = it },
-                                    label = { Text(t("Ключ шифрования", "Encryption key")) },
-                                    singleLine = true,
-                                    visualTransformation = PasswordVisualTransformation(),
-                                    modifier = Modifier.fillMaxWidth(),
-                                )
+                                TextButton(onClick = { showManualConnection = !showManualConnection }) {
+                                    Text(
+                                        if (showManualConnection) t("Скрыть ручную настройку", "Hide manual setup")
+                                        else t("Настроить вручную", "Set up manually"),
+                                    )
+                                }
+                                if (showManualConnection) {
+                                    OutlinedTextField(
+                                        value = url, onValueChange = { url = it; status = null }, singleLine = true,
+                                        enabled = !busy, label = { Text("Relay URL") },
+                                        placeholder = { Text("https://agents.example.com") }, modifier = Modifier.fillMaxWidth(),
+                                    )
+                                    OutlinedButton(
+                                        enabled = !busy && url.isNotBlank(),
+                                        onClick = {
+                                            busy = true
+                                            status = null
+                                            scope.launch {
+                                                try {
+                                                    val info = discovery.inspect(url)
+                                                    status = t(
+                                                        "Relay доступен · протокол ${info.protocolVersions.joinToString()} · ${info.stage}.",
+                                                        "Relay reachable · protocol ${info.protocolVersions.joinToString()} · ${info.stage}.",
+                                                    )
+                                                } catch (e: CancellationException) {
+                                                    throw e
+                                                } catch (e: Exception) {
+                                                    status = t("Проверка не пройдена: ", "Check failed: ") +
+                                                        (e.message?.take(240) ?: t("ошибка соединения", "connection error"))
+                                                } finally { busy = false }
+                                            }
+                                        },
+                                    ) { Text(if (busy) t("Проверяем…", "Checking…") else t("Проверить адрес", "Check address")) }
+                                    OutlinedTextField(
+                                        value = workspaceId,
+                                        onValueChange = { workspaceId = it.take(64); selectedHostId = null },
+                                        label = { Text(t("Пространство", "Workspace")) },
+                                        placeholder = { Text("alex") },
+                                        singleLine = true,
+                                        modifier = Modifier.fillMaxWidth(),
+                                    )
+                                    OutlinedTextField(
+                                        value = bridgeToken,
+                                        onValueChange = { bridgeToken = it },
+                                        label = { Text(t("Пароль Router", "Router password")) },
+                                        singleLine = true,
+                                        visualTransformation = PasswordVisualTransformation(),
+                                        modifier = Modifier.fillMaxWidth(),
+                                    )
+                                    OutlinedTextField(
+                                        value = bridgeKey,
+                                        onValueChange = { bridgeKey = it },
+                                        label = { Text(t("Ключ шифрования", "Encryption key")) },
+                                        singleLine = true,
+                                        visualTransformation = PasswordVisualTransformation(),
+                                        modifier = Modifier.fillMaxWidth(),
+                                    )
+                                }
                                 OutlinedButton(
                                     enabled = !remoteState.busy && url.isNotBlank() && workspaceId.isNotBlank() && bridgeToken.length >= 12,
                                     onClick = {
@@ -472,17 +497,18 @@ fun BridgeApp(
                                     )
                                 }
                             }
-                            Button(
-                                enabled = !remoteState.connected && !remoteState.busy && url.isNotBlank() &&
-                                    (!remoteBridge.requiresCredentials || (bridgeToken.isNotBlank() && bridgeKey.isNotBlank() && selectedHostId != null)),
-                                onClick = { remoteBridge.connect(url, bridgeToken, bridgeKey, workspaceId, selectedHostId) },
-                            ) {
-                                Text(
-                                    if (remoteState.connected) t("Router запущен", "Router started")
-                                    else if (remoteState.busy && embeddedLocalRouter) t("Запускаем…", "Starting…")
-                                    else if (embeddedLocalRouter) t("Запустить один Router", "Start one Router")
-                                    else t("Подключиться", "Connect"),
-                                )
+                            if (!remoteState.connected) {
+                                Button(
+                                    enabled = !remoteState.busy && url.isNotBlank() &&
+                                        (!remoteBridge.requiresCredentials || (bridgeToken.isNotBlank() && bridgeKey.isNotBlank() && selectedHostId != null)),
+                                    onClick = { remoteBridge.connect(url, bridgeToken, bridgeKey, workspaceId, selectedHostId) },
+                                ) {
+                                    Text(
+                                        if (remoteState.busy && embeddedLocalRouter) t("Запускаем…", "Starting…")
+                                        else if (embeddedLocalRouter) t("Запустить один Router", "Start one Router")
+                                        else t("Подключиться", "Connect"),
+                                    )
+                                }
                             }
                             if (embeddedLocalRouter && remoteState.connected && connectUsbAndroid != null) {
                                 OutlinedButton(
@@ -507,7 +533,76 @@ fun BridgeApp(
                         remoteState.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                     }
                 }
-                if (scanningHarnesses || localHarnesses.isNotEmpty()) {
+                if (remoteBridge != null && remoteState.connected) {
+                    Row(
+                        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        FilterChip(
+                            selected = screenSection == "work",
+                            onClick = { screenSection = "work" },
+                            label = { Text("${t("Работа", "Work")} · ${remoteState.sessions.size}") },
+                        )
+                        FilterChip(
+                            selected = screenSection == "terminal",
+                            onClick = { screenSection = "terminal"; remoteBridge.refreshExternalSessions() },
+                            label = { Text("${t("Терминал", "Terminal")} · ${remoteState.externalSessions.size}") },
+                        )
+                        FilterChip(
+                            selected = screenSection == "system",
+                            onClick = { screenSection = "system" },
+                            label = { Text(t("Система", "System")) },
+                        )
+                    }
+                }
+                if (remoteBridge != null && remoteState.connected && screenSection == "system") {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    ) {
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            Text(t("Текущее подключение", "Current connection"), style = MaterialTheme.typography.titleLarge)
+                            Text(
+                                "${t("Компьютер", "Computer")}: ${remoteState.selectedHostId ?: "host"}",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Text(
+                                "${t("Пространство", "Workspace")}: ${remoteState.workspaceId}",
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                            Text(t("Агенты на Host", "Agents on Host"), style = MaterialTheme.typography.titleMedium)
+                            if (remoteState.agents.isEmpty()) {
+                                LinearProgressIndicator(Modifier.fillMaxWidth())
+                            } else {
+                                Row(
+                                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    remoteState.agents.forEach { agent ->
+                                        Surface(
+                                            shape = RoundedCornerShape(50),
+                                            color = if (agent.available) MaterialTheme.colorScheme.primaryContainer
+                                            else MaterialTheme.colorScheme.surfaceContainerHigh,
+                                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                                        ) {
+                                            Text(
+                                                "${if (agent.available) "●" else "○"} ${agent.name}",
+                                                Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+                                                color = if (agent.available) MaterialTheme.colorScheme.onPrimaryContainer
+                                                else MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if ((scanningHarnesses || localHarnesses.isNotEmpty()) &&
+                    (!remoteState.connected || screenSection == "system")
+                ) {
                     Row(
                         Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -555,7 +650,7 @@ fun BridgeApp(
                         }
                     }
                 }
-                if (remoteBridge != null && remoteState.connected) {
+                if (remoteBridge != null && remoteState.connected && screenSection == "terminal") {
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -592,7 +687,7 @@ fun BridgeApp(
                                     Text(if (showExternalSessions) t("Скрыть", "Hide") else t("Найти текущую сессию", "Find current session"))
                                 }
                                 OutlinedButton(onClick = remoteBridge::refreshExternalSessions) {
-                                    Text(t("Обновить", "Refresh"))
+                                    Text("↻")
                                 }
                             }
                             if (showExternalSessions) {
@@ -689,6 +784,8 @@ fun BridgeApp(
                             }
                         }
                     }
+                }
+                if (remoteBridge != null && remoteState.connected && screenSection == "work") {
                     Card(
                         modifier = Modifier.fillMaxWidth(),
                         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
@@ -710,7 +807,7 @@ fun BridgeApp(
                                 }
                                 Surface(shape = RoundedCornerShape(50), color = MaterialTheme.colorScheme.secondaryContainer) {
                                     Text(
-                                        "${remoteState.liveSessionCount}/$MAX_LIVE_SESSIONS ${t("активно", "live")}",
+                                        "${remoteState.liveSessionCount} / $MAX_LIVE_SESSIONS",
                                         Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                                         color = MaterialTheme.colorScheme.onSecondaryContainer,
                                         style = MaterialTheme.typography.labelMedium,
@@ -844,7 +941,10 @@ fun BridgeApp(
                                         }
                                     }
                                 }
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Row(
+                                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
                                     remoteState.agents.filter { it.available }.forEach { agent ->
                                         FilterChip(
                                             selected = preferredAgentId == agent.id,

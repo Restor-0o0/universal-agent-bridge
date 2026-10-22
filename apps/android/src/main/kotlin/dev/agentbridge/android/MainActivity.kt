@@ -34,6 +34,7 @@ class MainActivity : ComponentActivity() {
         val automaticUrl = if (development) intent.getStringExtra(EXTRA_RELAY_URL) else null
         val automaticToken = if (development) intent.getStringExtra(EXTRA_TOKEN) else null
         val automaticKey = if (development) intent.getStringExtra(EXTRA_KEY) else null
+        val automaticHost = if (development) intent.getStringExtra(EXTRA_HOST) else null
         intent.removeExtra(EXTRA_TOKEN)
         intent.removeExtra(EXTRA_KEY)
         remoteBridge = AndroidRemoteBridge.active ?: AndroidRemoteBridge(applicationContext)
@@ -58,7 +59,7 @@ class MainActivity : ComponentActivity() {
             )
         }
         if (automaticUrl != null && automaticToken != null && automaticKey != null) {
-            remoteBridge.connect(automaticUrl, automaticToken, automaticKey)
+            remoteBridge.connect(automaticUrl, automaticToken, automaticKey, hostId = automaticHost)
         }
     }
     override fun onDestroy() {
@@ -71,5 +72,6 @@ class MainActivity : ComponentActivity() {
         const val EXTRA_RELAY_URL = "agent_bridge_url"
         const val EXTRA_TOKEN = "agent_bridge_token"
         const val EXTRA_KEY = "agent_bridge_key"
+        const val EXTRA_HOST = "agent_bridge_host"
     }
 }

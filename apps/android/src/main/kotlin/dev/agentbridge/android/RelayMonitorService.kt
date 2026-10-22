@@ -1,6 +1,7 @@
 package dev.agentbridge.android
 
 import android.app.Service
+import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
@@ -26,6 +27,9 @@ class RelayMonitorService : Service() {
             AndroidRemoteBridge.active?.close()
             stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
+        } else if (intent?.action == ACTION_DISCONNECT) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
         }
         return START_NOT_STICKY
     }
@@ -34,5 +38,13 @@ class RelayMonitorService : Service() {
 
     companion object {
         const val ACTION_STOP = "dev.agentbridge.android.STOP_MONITORING"
+        private const val ACTION_DISCONNECT = "dev.agentbridge.android.DISCONNECT_MONITORING"
+
+        fun stopAfterDisconnect(context: Context) {
+            // Queue the stop behind startForegroundService(). Calling stopService() while Android is
+            // still creating the service leaves an unfinished foreground-service start and crashes
+            // the process a few seconds later on fast connection failures.
+            context.startService(Intent(context, RelayMonitorService::class.java).setAction(ACTION_DISCONNECT))
+        }
     }
 }
