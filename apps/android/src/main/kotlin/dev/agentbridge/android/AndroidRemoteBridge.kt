@@ -152,6 +152,11 @@ class AndroidRemoteBridge(context: Context) : RemoteBridgeActions, AutoCloseable
         persistTabs()
         syncTab(tabId)
     }
+    override fun setSessionPinned(tabId: String, pinned: Boolean) {
+        mutableState.update { it.updateTab(tabId) { current -> current.copy(pinned = pinned) } }
+        persistTabs()
+        syncTab(tabId)
+    }
     override fun clearSession(tabId: String) {
         val tab = mutableState.value.sessions.firstOrNull { it.tabId == tabId } ?: return
         mutableState.update { it.updateTab(tabId) { current -> current.copy(
@@ -214,14 +219,28 @@ class AndroidRemoteBridge(context: Context) : RemoteBridgeActions, AutoCloseable
         syncTab(tabId)
         startTab(tabId)
     }
-    override fun sendText(text: String) {
-        val tab = mutableState.value.activeSession ?: return
+    override fun sendText(tabId: String, text: String) {
+        val tab = mutableState.value.sessions.firstOrNull { it.tabId == tabId } ?: return
         val sessionId = tab.sessionId ?: return
+        if (tab.busy || text.isBlank()) return
         mutableState.update { it.updateTab(tab.tabId) { current -> current.copy(busy = true, error = null) } }
         send(sessionId, BridgePayload.SendText(UUID.randomUUID().toString(), sessionId, text, UUID.randomUUID().toString()))
     }
-    override fun respondApproval(approvalId: String, allow: Boolean) {
-        val tab = mutableState.value.activeSession ?: return
+    override fun queueText(tabId: String, text: String) {
+        val queued = text.trim().takeIf(String::isNotEmpty) ?: return
+        mutableState.update { it.updateTab(tabId) { current ->
+            current.copy(queuedMessages = (current.queuedMessages + queued).takeLast(MAX_QUEUED_MESSAGES))
+        } }
+        persistTabs(); syncTab(tabId); dispatchNext(tabId)
+    }
+    override fun removeQueuedText(tabId: String, index: Int) {
+        mutableState.update { it.updateTab(tabId) { current ->
+            current.copy(queuedMessages = current.queuedMessages.filterIndexed { itemIndex, _ -> itemIndex != index })
+        } }
+        persistTabs(); syncTab(tabId)
+    }
+    override fun respondApproval(tabId: String, approvalId: String, allow: Boolean) {
+        val tab = mutableState.value.sessions.firstOrNull { it.tabId == tabId } ?: return
         val sessionId = tab.sessionId ?: return
         clearHelpNotification(approvalId)
         mutableState.update { it.updateTab(tab.tabId) { current -> current.copy(approvals = current.approvals.filterNot { approval -> approval.id == approvalId }, helpNeeded = null) } }
@@ -302,6 +321,7 @@ class AndroidRemoteBridge(context: Context) : RemoteBridgeActions, AutoCloseable
 
     private fun reduce(payload: BridgePayload) {
         var restartTabId: String? = null
+        var dispatchTabId: String? = null
         mutableState.update { state ->
             when (payload) {
                 is BridgePayload.ExternalSessionList -> state.copy(externalSessions = payload.sessions)
@@ -317,6 +337,7 @@ class AndroidRemoteBridge(context: Context) : RemoteBridgeActions, AutoCloseable
                 is BridgePayload.DirectoryList -> state.copy(directoryCurrent = payload.current, directoryParent = payload.parent, directories = payload.directories, busy = false)
                 is BridgePayload.SessionStarted -> {
                     val tabId = pendingStarts.remove(payload.requestId) ?: return@update state
+                    dispatchTabId = tabId
                     state.updateTab(tabId) { it.copy(
                         sessionId = payload.sessionId, lastSessionId = payload.sessionId, agentId = payload.agentId,
                         capabilities = payload.capabilities, resumed = payload.resumed, busy = false, closing = false, error = null,
@@ -340,7 +361,10 @@ class AndroidRemoteBridge(context: Context) : RemoteBridgeActions, AutoCloseable
                 is BridgePayload.ApprovalRequested -> state.updateSession(payload.sessionId) { it.copy(approvals = it.approvals + RemoteApprovalView(payload.approvalId, payload.command, payload.cwd)) }
                 is BridgePayload.AgentActivity -> state.updateSession(payload.sessionId) { it.copy(activity = (it.activity + AgentActivityView(payload.state, payload.detail, payload.createdAtMillis)).takeLast(50)) }
                 is BridgePayload.HelpNeeded -> state.updateSession(payload.sessionId) { it.copy(helpNeeded = payload.reason) }
-                is BridgePayload.TurnFinished -> state.updateSession(payload.sessionId) { it.copy(busy = false, approvals = emptyList(), helpNeeded = null) }
+                is BridgePayload.TurnFinished -> {
+                    dispatchTabId = state.tabIdFor(payload.sessionId)
+                    state.updateSession(payload.sessionId) { it.copy(busy = false, approvals = emptyList(), helpNeeded = null) }
+                }
                 is BridgePayload.Failure -> {
                     val tabId = payload.sessionId?.let { state.tabIdFor(it) } ?: payload.requestId?.let { pendingStarts.remove(it) }
                     if (tabId == null) state.copy(busy = false, error = payload.code)
@@ -356,6 +380,7 @@ class AndroidRemoteBridge(context: Context) : RemoteBridgeActions, AutoCloseable
             }
         }
         restartTabId?.let { tabId -> syncTab(tabId); startTab(tabId) }
+        dispatchTabId?.let(::dispatchNext)
     }
 
     private fun loadTabs(): List<RemoteSessionView> = runCatching {
@@ -363,12 +388,12 @@ class AndroidRemoteBridge(context: Context) : RemoteBridgeActions, AutoCloseable
             RemoteSessionView(
                 tabId = tab.tabId, title = tab.title, workingDirectory = tab.workingDirectory,
                 requestedAgentId = tab.agentId, agentId = tab.agentId, lastSessionId = tab.lastSessionId,
-                autoMode = tab.autoMode, busy = false,
+                autoMode = tab.autoMode, queuedMessages = tab.queuedMessages, pinned = tab.pinned, busy = false,
             )
         }
     }.getOrDefault(emptyList())
     private fun persistTabs() {
-        val tabs = mutableState.value.sessions.map { SavedAgentTab(it.tabId, it.title, it.workingDirectory, it.agentId ?: it.requestedAgentId, it.lastSessionId, it.autoMode) }
+        val tabs = mutableState.value.sessions.map { it.toSavedTab() }
         preferences.edit().putString(TABS_KEY, BridgeJson.encodeToString(tabs)).apply()
     }
     private fun removeTab(tabId: String) {
@@ -391,7 +416,7 @@ class AndroidRemoteBridge(context: Context) : RemoteBridgeActions, AutoCloseable
     }
 
     private fun RemoteSessionView.toSavedTab() = SavedAgentTab(
-        tabId, title, workingDirectory, agentId ?: requestedAgentId, lastSessionId, autoMode,
+        tabId, title, workingDirectory, agentId ?: requestedAgentId, lastSessionId, autoMode, queuedMessages, pinned,
     )
 
     private fun mergeSavedTabs(state: RemoteBridgeState, tabs: List<SavedAgentTab>): RemoteBridgeState {
@@ -401,11 +426,12 @@ class AndroidRemoteBridge(context: Context) : RemoteBridgeActions, AutoCloseable
             if (runtime == null) RemoteSessionView(
                 tabId = saved.tabId, title = saved.title, workingDirectory = saved.workingDirectory,
                 requestedAgentId = saved.agentId, agentId = saved.agentId, lastSessionId = saved.lastSessionId,
-                autoMode = saved.autoMode, busy = false,
+                autoMode = saved.autoMode, queuedMessages = saved.queuedMessages, pinned = saved.pinned, busy = false,
             ) else runtime.copy(
                 title = saved.title, workingDirectory = saved.workingDirectory,
                 requestedAgentId = saved.agentId, agentId = saved.agentId,
                 lastSessionId = saved.lastSessionId ?: runtime.lastSessionId, autoMode = saved.autoMode,
+                queuedMessages = saved.queuedMessages, pinned = saved.pinned,
             )
         }
         val active = state.activeTabId?.takeIf { id -> merged.any { it.tabId == id } } ?: merged.firstOrNull()?.tabId
@@ -418,6 +444,17 @@ class AndroidRemoteBridge(context: Context) : RemoteBridgeActions, AutoCloseable
     private fun RemoteBridgeState.tabIdFor(sessionId: String) = sessions.firstOrNull { it.sessionId == sessionId }?.tabId
     private fun RemoteBridgeState.updateSession(sessionId: String, block: (RemoteSessionView) -> RemoteSessionView) = tabIdFor(sessionId)?.let { updateTab(it, block) } ?: this
     private fun RemoteBridgeState.updateTab(tabId: String, block: (RemoteSessionView) -> RemoteSessionView) = copy(sessions = sessions.map { if (it.tabId == tabId) block(it) else it })
+    private fun dispatchNext(tabId: String) {
+        val tab = mutableState.value.sessions.firstOrNull { it.tabId == tabId } ?: return
+        val sessionId = tab.sessionId ?: return
+        if (tab.busy || tab.closing) return
+        val text = tab.queuedMessages.firstOrNull() ?: return
+        mutableState.update { it.updateTab(tabId) { current ->
+            current.copy(queuedMessages = current.queuedMessages.drop(1), busy = true, error = null)
+        } }
+        persistTabs(); syncTab(tabId)
+        send(sessionId, BridgePayload.SendText(UUID.randomUUID().toString(), sessionId, text, UUID.randomUUID().toString()))
+    }
     private fun fail(failure: Throwable) = mutableState.update { it.copy(busy = false, error = failure.message?.take(240) ?: "Ошибка моста") }
 
     override fun close() {
@@ -432,6 +469,7 @@ class AndroidRemoteBridge(context: Context) : RemoteBridgeActions, AutoCloseable
         private const val HOST_MIGRATION_KEY = "saved_agent_tabs_host_migrated_v1"
         private const val DEVICE_ID_KEY = "router_device_id_v1"
         private const val REMINDER_INTERVAL_MILLIS = 5 * 60 * 1000L
+        private const val MAX_QUEUED_MESSAGES = 20
         @Volatile var active: AndroidRemoteBridge? = null
             private set
     }

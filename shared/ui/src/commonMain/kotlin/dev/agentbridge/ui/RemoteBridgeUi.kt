@@ -31,6 +31,8 @@ data class RemoteSessionView(
     val agentId: String? = null,
     val capabilities: Set<String> = emptySet(),
     val autoMode: Boolean = false,
+    val queuedMessages: List<String> = emptyList(),
+    val pinned: Boolean = false,
     val resumed: Boolean = false,
     val transcript: String = "",
     val approvals: List<RemoteApprovalView> = emptyList(),
@@ -87,9 +89,12 @@ interface RemoteBridgeActions {
     fun deleteSession(tabId: String)
     fun renameSession(tabId: String, title: String)
     fun setSessionAutoMode(tabId: String, enabled: Boolean)
+    fun setSessionPinned(tabId: String, pinned: Boolean)
     fun clearSession(tabId: String)
-    fun sendText(text: String)
-    fun respondApproval(approvalId: String, allow: Boolean)
+    fun sendText(tabId: String, text: String)
+    fun queueText(tabId: String, text: String)
+    fun removeQueuedText(tabId: String, index: Int)
+    fun respondApproval(tabId: String, approvalId: String, allow: Boolean)
     fun interrupt()
     fun setWakeAlarmEnabled(enabled: Boolean)
 }

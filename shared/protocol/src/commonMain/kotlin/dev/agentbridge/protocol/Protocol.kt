@@ -37,6 +37,8 @@ data class SavedAgentTab(
     val agentId: String? = null,
     val lastSessionId: String? = null,
     val autoMode: Boolean = false,
+    val queuedMessages: List<String> = emptyList(),
+    val pinned: Boolean = false,
 )
 
 @Serializable

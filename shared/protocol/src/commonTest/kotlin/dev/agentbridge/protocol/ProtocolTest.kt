@@ -32,7 +32,10 @@ class ProtocolTest {
             BridgePayload.ResumeSession("resume-1", "session-1", "opencode", "C:\\projects"),
             BridgePayload.SaveTab(
                 "save-1",
-                SavedAgentTab("tab-1", "API", "C:\\projects", "opencode", "session-1", true),
+                SavedAgentTab(
+                    "tab-1", "API", "C:\\projects", "opencode", "session-1", true,
+                    listOf("Run tests", "Prepare summary"),
+                ),
             ),
             BridgePayload.SavedTabList(
                 "tabs-1",
@@ -59,5 +62,11 @@ class ProtocolTest {
         values.forEach { value ->
             assertEquals(value, BridgeJson.decodeFromString<BridgePayload>(BridgeJson.encodeToString(value)))
         }
+    }
+    @Test fun oldSavedTabsLoadWithAnEmptyQueue() {
+        val oldJson = """{"tabId":"tab-1","title":"API","workingDirectory":"C:/projects"}"""
+        val tab = BridgeJson.decodeFromString<SavedAgentTab>(oldJson)
+        assertEquals(emptyList(), tab.queuedMessages)
+        assertFalse(tab.pinned)
     }
 }

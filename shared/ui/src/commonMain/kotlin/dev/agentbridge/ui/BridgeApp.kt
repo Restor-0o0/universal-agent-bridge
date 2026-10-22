@@ -224,6 +224,8 @@ fun BridgeApp(
     var showDirectoryBrowser by remember { mutableStateOf(false) }
     var preferredAgentId by rememberSaveable { mutableStateOf<String?>(null) }
     var newTabName by rememberSaveable { mutableStateOf("") }
+    var sessionQuery by rememberSaveable { mutableStateOf("") }
+    var sessionFilter by rememberSaveable { mutableStateOf("all") }
     val promptDrafts = remember { mutableStateMapOf<String, String>() }
     var bridgeToken by remember { mutableStateOf("") }
     var bridgeKey by remember { mutableStateOf("") }
@@ -236,6 +238,9 @@ fun BridgeApp(
     var screenSection by rememberSaveable { mutableStateOf("work") }
     var connectionTarget by rememberSaveable {
         mutableStateOf(if (url.startsWith("http://127.0.0.1")) "local" else "vps")
+    }
+    val attentionSessions = remoteState.sessions.filter {
+        it.helpNeeded != null || it.approvals.isNotEmpty() || it.error != null
     }
     val embeddedLocalRouter = remoteBridge != null &&
         !remoteBridge.requiresCredentials &&
@@ -539,6 +544,11 @@ fun BridgeApp(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         FilterChip(
+                            selected = screenSection == "attention",
+                            onClick = { screenSection = "attention" },
+                            label = { Text("${t("Внимание", "Attention")} · ${attentionSessions.size}") },
+                        )
+                        FilterChip(
                             selected = screenSection == "work",
                             onClick = { screenSection = "work" },
                             label = { Text("${t("Работа", "Work")} · ${remoteState.sessions.size}") },
@@ -553,6 +563,81 @@ fun BridgeApp(
                             onClick = { screenSection = "system" },
                             label = { Text(t("Система", "System")) },
                         )
+                    }
+                }
+                if (remoteBridge != null && remoteState.connected && screenSection == "attention") {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                    ) {
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Text(t("Центр внимания", "Attention center"), style = MaterialTheme.typography.titleLarge)
+                            Text(
+                                t(
+                                    "Разрешения, запросы помощи и ошибки из всех вкладок.",
+                                    "Approvals, help requests, and errors from every tab.",
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            if (attentionSessions.isEmpty()) {
+                                Surface(
+                                    Modifier.fillMaxWidth(),
+                                    shape = MaterialTheme.shapes.medium,
+                                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.45f),
+                                ) {
+                                    Text(
+                                        t("✓ Все агенты работают без запросов", "✓ No agents need attention"),
+                                        Modifier.padding(16.dp),
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    )
+                                }
+                            }
+                            attentionSessions.forEach { session ->
+                                Surface(
+                                    Modifier.fillMaxWidth(),
+                                    shape = MaterialTheme.shapes.medium,
+                                    color = if (session.error != null) MaterialTheme.colorScheme.errorContainer
+                                    else MaterialTheme.colorScheme.surfaceContainer,
+                                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                                ) {
+                                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Row(
+                                            Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            Column(Modifier.weight(1f)) {
+                                                Text(session.title, fontWeight = FontWeight.SemiBold)
+                                                Text(
+                                                    session.agentId ?: session.requestedAgentId ?: "agent",
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                )
+                                            }
+                                            TextButton(onClick = {
+                                                remoteBridge.selectSession(session.tabId)
+                                                screenSection = "work"
+                                            }) { Text(t("Открыть", "Open")) }
+                                        }
+                                        session.helpNeeded?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                                        session.error?.let { Text(it, color = MaterialTheme.colorScheme.onErrorContainer) }
+                                        session.approvals.forEach { approval ->
+                                            Text(approval.command, style = MaterialTheme.typography.bodyMedium)
+                                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                                Button(onClick = { remoteBridge.respondApproval(session.tabId, approval.id, true) }) {
+                                                    Text(t("Разрешить", "Allow"))
+                                                }
+                                                OutlinedButton(onClick = { remoteBridge.respondApproval(session.tabId, approval.id, false) }) {
+                                                    Text(t("Отклонить", "Deny"))
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 if (remoteBridge != null && remoteState.connected && screenSection == "system") {
@@ -814,6 +899,51 @@ fun BridgeApp(
                                     )
                                 }
                             }
+                            if (remoteState.sessions.size >= 4) {
+                                OutlinedTextField(
+                                    value = sessionQuery,
+                                    onValueChange = { sessionQuery = it.take(80) },
+                                    label = { Text(t("Поиск вкладок", "Search tabs")) },
+                                    placeholder = { Text(t("Название, агент или папка", "Title, agent, or folder")) },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
+                            if (remoteState.sessions.isNotEmpty()) {
+                                Row(
+                                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    listOf(
+                                        "all" to t("Все", "All"),
+                                        "live" to t("Запущены", "Running"),
+                                        "attention" to t("Нужна помощь", "Needs attention"),
+                                        "queued" to t("С очередью", "Queued"),
+                                    ).forEach { (id, label) ->
+                                        FilterChip(
+                                            selected = sessionFilter == id,
+                                            onClick = { sessionFilter = id },
+                                            label = { Text(label) },
+                                        )
+                                    }
+                                }
+                            }
+                            val normalizedQuery = sessionQuery.trim().lowercase()
+                            val visibleSessions = remoteState.sessions.filter { session ->
+                                val matchesQuery = normalizedQuery.isEmpty() || listOf(
+                                    session.title,
+                                    session.workingDirectory,
+                                    session.agentId.orEmpty(),
+                                    session.requestedAgentId.orEmpty(),
+                                ).any { normalizedQuery in it.lowercase() }
+                                val matchesFilter = when (sessionFilter) {
+                                    "live" -> session.sessionId != null
+                                    "attention" -> session.helpNeeded != null || session.approvals.isNotEmpty() || session.error != null
+                                    "queued" -> session.queuedMessages.isNotEmpty()
+                                    else -> true
+                                }
+                                matchesQuery && matchesFilter
+                            }.sortedByDescending { it.pinned }
                             Row(
                                 Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -824,18 +954,21 @@ fun BridgeApp(
                                     enabled = remoteState.sessions.size < MAX_SAVED_TABS && remoteState.liveSessionCount < MAX_LIVE_SESSIONS,
                                     label = { Text(t("＋ Новая", "＋ New")) },
                                 )
-                                remoteState.sessions.forEach { session ->
+                                visibleSessions.forEach { session ->
                                     val marker = when {
                                         session.helpNeeded != null || session.approvals.isNotEmpty() -> " !"
                                         session.closing -> " ×"
                                         session.busy -> " …"
+                                        session.queuedMessages.isNotEmpty() -> " +${session.queuedMessages.size}"
                                         session.sessionId == null -> " ○"
                                         else -> ""
                                     }
                                     FilterChip(
                                         selected = remoteState.activeTabId == session.tabId,
                                         onClick = { remoteBridge.selectSession(session.tabId) },
-                                        label = { Text("${session.agentId ?: session.requestedAgentId ?: "agent"}: ${session.title}$marker") },
+                                        label = {
+                                            Text("${if (session.pinned) "★ " else ""}${session.agentId ?: session.requestedAgentId ?: "agent"}: ${session.title}$marker")
+                                        },
                                     )
                                 }
                             }
@@ -1035,11 +1168,36 @@ fun BridgeApp(
                                             Text(approval.command)
                                             if (approval.cwd.isNotBlank()) Text(approval.cwd, style = MaterialTheme.typography.bodySmall)
                                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                                Button(onClick = { remoteBridge.respondApproval(approval.id, true) }) {
+                                                Button(onClick = { remoteBridge.respondApproval(activeSession.tabId, approval.id, true) }) {
                                                     Text(t("Разрешить один раз", "Allow once"))
                                                 }
-                                                OutlinedButton(onClick = { remoteBridge.respondApproval(approval.id, false) }) {
+                                                OutlinedButton(onClick = { remoteBridge.respondApproval(activeSession.tabId, approval.id, false) }) {
                                                     Text(t("Отклонить", "Deny"))
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                if (activeSession.queuedMessages.isNotEmpty()) {
+                                    Text(
+                                        "${t("Очередь задач", "Task queue")} · ${activeSession.queuedMessages.size}",
+                                        style = MaterialTheme.typography.titleMedium,
+                                    )
+                                    activeSession.queuedMessages.forEachIndexed { index, queued ->
+                                        Surface(
+                                            Modifier.fillMaxWidth(),
+                                            shape = MaterialTheme.shapes.small,
+                                            color = MaterialTheme.colorScheme.surfaceContainer,
+                                        ) {
+                                            Row(
+                                                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                            ) {
+                                                Text("${index + 1}.", color = MaterialTheme.colorScheme.primary)
+                                                Text(queued, Modifier.weight(1f), maxLines = 2)
+                                                TextButton(onClick = { remoteBridge.removeQueuedText(activeSession.tabId, index) }) {
+                                                    Text("×")
                                                 }
                                             }
                                         }
@@ -1053,14 +1211,29 @@ fun BridgeApp(
                                     minLines = 3,
                                     modifier = Modifier.fillMaxWidth(),
                                 )
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Row(
+                                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
                                     Button(
                                         enabled = promptDrafts[activeSession.tabId].orEmpty().isNotBlank() && !activeSession.busy && activeSession.sessionId != null,
                                         onClick = {
-                                            remoteBridge.sendText(promptDrafts[activeSession.tabId].orEmpty())
+                                            remoteBridge.sendText(activeSession.tabId, promptDrafts[activeSession.tabId].orEmpty())
                                             promptDrafts.remove(activeSession.tabId)
                                         },
                                     ) { Text(t("Отправить", "Send")) }
+                                    OutlinedButton(
+                                        enabled = promptDrafts[activeSession.tabId].orEmpty().isNotBlank() && !activeSession.closing,
+                                        onClick = {
+                                            remoteBridge.queueText(activeSession.tabId, promptDrafts[activeSession.tabId].orEmpty())
+                                            promptDrafts.remove(activeSession.tabId)
+                                        },
+                                    ) { Text(t("В очередь", "Queue")) }
+                                }
+                                Row(
+                                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
                                     OutlinedButton(
                                         enabled = activeSession.sessionId != null && !activeSession.closing,
                                         onClick = remoteBridge::interrupt,
@@ -1070,9 +1243,17 @@ fun BridgeApp(
                                         onClick = { remoteBridge.closeSession(activeSession.tabId) },
                                     ) { Text(if (activeSession.closing) t("Останавливаем…", "Stopping…") else t("Остановить агент", "Stop agent")) }
                                 }
-                                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Row(
+                                    Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
                                     OutlinedButton(onClick = { remoteBridge.clearSession(activeSession.tabId) }) {
                                         Text(t("Новый контекст", "New context"))
+                                    }
+                                    TextButton(onClick = {
+                                        remoteBridge.setSessionPinned(activeSession.tabId, !activeSession.pinned)
+                                    }) {
+                                        Text(if (activeSession.pinned) t("Открепить", "Unpin") else t("Закрепить", "Pin"))
                                     }
                                     TextButton(
                                         enabled = !activeSession.closing,
