@@ -19,6 +19,14 @@ import java.util.Base64
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
+private data class AndroidConnectionTarget(
+    val relayUrl: String,
+    val token: String,
+    val keyText: String,
+    val workspaceId: String,
+    val hostId: String,
+)
+
 class AndroidRemoteBridge(context: Context) : RemoteBridgeActions, AutoCloseable {
     private val appContext = context.applicationContext
     private val preferences = appContext.getSharedPreferences("agent_bridge_tabs", Context.MODE_PRIVATE)
@@ -37,6 +45,9 @@ class AndroidRemoteBridge(context: Context) : RemoteBridgeActions, AutoCloseable
     private val reminderJobs = ConcurrentHashMap<String, Job>()
     private val helpSessions = ConcurrentHashMap<String, String>()
     private var connection: EncryptedRelayConnection? = null
+    private var desiredConnection: AndroidConnectionTarget? = null
+    private var reconnectJob: Job? = null
+    private var closing = false
     private var targetHostId: String = "host"
     private val deviceId = preferences.getString(DEVICE_ID_KEY, null) ?: "android-${UUID.randomUUID().toString().take(8)}".also {
         preferences.edit().putString(DEVICE_ID_KEY, it).apply()
@@ -65,27 +76,57 @@ class AndroidRemoteBridge(context: Context) : RemoteBridgeActions, AutoCloseable
         if (connection != null) return
         val token = bearerToken?.takeIf(String::isNotBlank) ?: return fail(IllegalArgumentException("Укажите пароль Router"))
         val keyText = keyBase64Url?.takeIf(String::isNotBlank) ?: return fail(IllegalArgumentException("Укажите ключ шифрования"))
-        targetHostId = hostId ?: mutableState.value.hosts.singleOrNull()?.id ?: "host"
+        closing = false
+        reconnectJob?.cancel()
+        reconnectJob = null
+        val target = AndroidConnectionTarget(
+            relayUrl, token, keyText, workspaceId,
+            hostId ?: mutableState.value.hosts.singleOrNull()?.id ?: "host",
+        )
+        desiredConnection = target
+        connectTarget(target)
+    }
+
+    private fun connectTarget(target: AndroidConnectionTarget) {
+        if (connection != null || closing) return
+        targetHostId = target.hostId
         mutableState.update { it.copy(busy = true, error = null) }
         scope.launch {
             runCatching {
                 EncryptedRelayConnection(
-                    http, relayUrl, token, deviceId, DevelopmentPresharedCipher(Base64.getUrlDecoder().decode(keyText)),
-                    workspaceId = workspaceId,
+                    http, target.relayUrl, target.token, deviceId,
+                    DevelopmentPresharedCipher(Base64.getUrlDecoder().decode(target.keyText)),
+                    workspaceId = target.workspaceId,
                 ).also { it.connect() }
             }
                 .onSuccess { connected ->
                     connection = connected
+                    reconnectJob = null
                     appContext.startForegroundService(Intent(appContext, RelayMonitorService::class.java))
-                    mutableState.update { it.copy(connected = true, busy = false, workspaceId = workspaceId, selectedHostId = targetHostId) }
+                    mutableState.update { it.copy(
+                        connected = true, reconnecting = false, reconnectAttempt = 0, busy = false,
+                        error = null, workspaceId = target.workspaceId, selectedHostId = targetHostId,
+                        lastConnectedAtMillis = System.currentTimeMillis(),
+                    ) }
                     scope.launch { collectIncoming(connected) }
                     migrateLocalTabs(connected)
                     connected.send(targetHostId, "control", BridgePayload.ListSavedTabs(UUID.randomUUID().toString()))
                     connected.send(targetHostId, "control", BridgePayload.ListAgents(UUID.randomUUID().toString()))
                     connected.send(targetHostId, "control", BridgePayload.ListDirectories(UUID.randomUUID().toString()))
                     connected.send(targetHostId, "control", BridgePayload.ListExternalSessions(UUID.randomUUID().toString()))
-                }.onFailure(::fail)
+                }.onFailure { failure ->
+                    fail(failure)
+                    if (mutableState.value.lastConnectedAtMillis != null) scheduleReconnect()
+                }
         }
+    }
+
+    override fun reconnectNow() {
+        if (connection != null || desiredConnection == null) return
+        reconnectJob?.cancel()
+        reconnectJob = null
+        mutableState.update { it.copy(reconnectAttempt = 0) }
+        scheduleReconnect(immediate = true)
     }
 
     override fun startSession(workingDirectory: String, preferredAgentId: String?, title: String?) {
@@ -290,11 +331,13 @@ class AndroidRemoteBridge(context: Context) : RemoteBridgeActions, AutoCloseable
             pendingStarts.clear()
             mutableState.update { state -> state.copy(
                 connected = false, busy = false,
+                reconnecting = !closing,
+                lastDisconnectedAtMillis = System.currentTimeMillis(),
                 sessions = state.sessions.map { it.copy(sessionId = null, busy = false, closing = false, approvals = emptyList()) },
                 watchedExternalSession = null,
                 externalTranscript = "",
             ) }
-            RelayMonitorService.stopAfterDisconnect(appContext)
+            if (closing) RelayMonitorService.stopAfterDisconnect(appContext) else scheduleReconnect()
         }
         failure?.let(::fail)
     }
@@ -444,6 +487,17 @@ class AndroidRemoteBridge(context: Context) : RemoteBridgeActions, AutoCloseable
     private fun RemoteBridgeState.tabIdFor(sessionId: String) = sessions.firstOrNull { it.sessionId == sessionId }?.tabId
     private fun RemoteBridgeState.updateSession(sessionId: String, block: (RemoteSessionView) -> RemoteSessionView) = tabIdFor(sessionId)?.let { updateTab(it, block) } ?: this
     private fun RemoteBridgeState.updateTab(tabId: String, block: (RemoteSessionView) -> RemoteSessionView) = copy(sessions = sessions.map { if (it.tabId == tabId) block(it) else it })
+    private fun scheduleReconnect(immediate: Boolean = false) {
+        val target = desiredConnection ?: return
+        if (closing || connection != null || reconnectJob?.isActive == true) return
+        val attempt = mutableState.value.reconnectAttempt + 1
+        mutableState.update { it.copy(reconnecting = true, reconnectAttempt = attempt, busy = false) }
+        reconnectJob = scope.launch {
+            if (!immediate) delay(minOf(30_000L, 1_000L * (1L shl minOf(attempt - 1, 5))))
+            reconnectJob = null
+            connectTarget(target)
+        }
+    }
     private fun dispatchNext(tabId: String) {
         val tab = mutableState.value.sessions.firstOrNull { it.tabId == tabId } ?: return
         val sessionId = tab.sessionId ?: return
@@ -458,8 +512,10 @@ class AndroidRemoteBridge(context: Context) : RemoteBridgeActions, AutoCloseable
     private fun fail(failure: Throwable) = mutableState.update { it.copy(busy = false, error = failure.message?.take(240) ?: "Ошибка моста") }
 
     override fun close() {
+        closing = true
+        reconnectJob?.cancel(); reconnectJob = null; desiredConnection = null
         clearHelpNotifications(); connection?.close(); connection = null
-        mutableState.update { it.copy(connected = false, busy = false) }
+        mutableState.update { it.copy(connected = false, reconnecting = false, busy = false) }
         RelayMonitorService.stopAfterDisconnect(appContext); http.close(); scope.cancel()
         if (active === this) active = null
     }

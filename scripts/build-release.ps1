@@ -6,7 +6,7 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 $gradle = Join-Path $projectRoot 'gradlew.bat'
 $dist = Join-Path $projectRoot 'dist'
 
-& $gradle :desktopApp:packageExe :desktopApp:createDistributable :androidApp:assembleDebug `
+& $gradle :desktopApp:packageExe :desktopApp:packageMsi :desktopApp:createDistributable :androidApp:assembleDebug `
     :relayHeadless:installDist :hostApp:installDist
 if ($LASTEXITCODE -ne 0) { throw "Windows/Android build failed with exit code $LASTEXITCODE" }
 
@@ -37,6 +37,8 @@ if (-not $SkipLinux) {
 New-Item -ItemType Directory -Force -Path $dist | Out-Null
 Copy-Item -LiteralPath (Join-Path $projectRoot 'apps\desktop\build\compose\binaries\main\exe\AgentBridge-0.1.0.exe') `
     -Destination (Join-Path $dist 'AgentBridge-Windows-x64-0.1.0.exe') -Force
+Copy-Item -LiteralPath (Join-Path $projectRoot 'apps\desktop\build\compose\binaries\main\msi\AgentBridge-0.1.0.msi') `
+    -Destination (Join-Path $dist 'AgentBridge-Windows-x64-0.1.0.msi') -Force
 $portableDirectory = Join-Path $projectRoot 'apps\desktop\build\compose\binaries\main\app\AgentBridge'
 Compress-Archive -LiteralPath $portableDirectory `
     -DestinationPath (Join-Path $dist 'AgentBridge-Windows-portable-x64-0.1.0.zip') -CompressionLevel Optimal -Force

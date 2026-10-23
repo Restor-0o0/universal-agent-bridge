@@ -65,7 +65,7 @@ class MainActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         http.close()
-        if (!remoteBridge.state.value.connected) remoteBridge.close()
+        if (!remoteBridge.state.value.connected && !remoteBridge.state.value.reconnecting) remoteBridge.close()
     }
 
     private companion object {

@@ -331,6 +331,7 @@ fun BridgeApp(
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                         Text(
                             if (embeddedLocalRouter && remoteState.connected) t("Один Router работает", "One Router is running")
+                            else if (remoteState.reconnecting) t("Восстанавливаем соединение", "Reconnecting")
                             else if (embeddedLocalRouter) t("Запустить на этом компьютере", "Start on this computer")
                             else if (remoteState.connected) t("Мост подключён", "Bridge connected")
                             else t("Где работает Relay?", "Where does Relay run?"),
@@ -349,6 +350,18 @@ fun BridgeApp(
                                 ),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
+                        } else if (remoteState.reconnecting) {
+                            Text(
+                                t(
+                                    "Router временно недоступен. Попытка ${remoteState.reconnectAttempt}; приложение подключится само.",
+                                    "Router is temporarily unavailable. Attempt ${remoteState.reconnectAttempt}; the app will reconnect automatically.",
+                                ),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            LinearProgressIndicator(Modifier.fillMaxWidth())
+                            OutlinedButton(onClick = { remoteBridge?.reconnectNow() }) {
+                                Text(t("Повторить сейчас", "Retry now"))
+                            }
                         } else if (embeddedLocalRouter) {
                             Text(
                                 t(
@@ -357,7 +370,7 @@ fun BridgeApp(
                                 ),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
-                        } else if (remoteBridge?.requiresCredentials == true) {
+                        } else if (remoteBridge?.requiresCredentials == true && !remoteState.reconnecting) {
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 FilterChip(
                                     selected = connectionTarget == "local",
@@ -387,7 +400,7 @@ fun BridgeApp(
                             )
                         }
                         if (remoteBridge != null) {
-                            if (remoteBridge.requiresCredentials && !remoteState.connected) {
+                            if (remoteBridge.requiresCredentials && !remoteState.connected && !remoteState.reconnecting) {
                                 OutlinedTextField(
                                     value = connectionCode,
                                     onValueChange = { connectionCode = it },
@@ -502,7 +515,7 @@ fun BridgeApp(
                                     )
                                 }
                             }
-                            if (!remoteState.connected) {
+                            if (!remoteState.connected && !remoteState.reconnecting) {
                                 Button(
                                     enabled = !remoteState.busy && url.isNotBlank() &&
                                         (!remoteBridge.requiresCredentials || (bridgeToken.isNotBlank() && bridgeKey.isNotBlank() && selectedHostId != null)),

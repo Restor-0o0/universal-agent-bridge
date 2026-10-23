@@ -58,6 +58,10 @@ data class RemoteBridgeState(
     val sessions: List<RemoteSessionView> = emptyList(),
     val activeTabId: String? = null,
     val wakeAlarmEnabled: Boolean = false,
+    val reconnecting: Boolean = false,
+    val reconnectAttempt: Int = 0,
+    val lastConnectedAtMillis: Long? = null,
+    val lastDisconnectedAtMillis: Long? = null,
     val busy: Boolean = false,
     val error: String? = null,
 ) {
@@ -78,6 +82,7 @@ interface RemoteBridgeActions {
         workspaceId: String = "default",
         hostId: String? = null,
     )
+    fun reconnectNow()
     fun browseDirectories(parent: String? = null)
     fun refreshExternalSessions()
     fun watchExternalSession(session: WireExternalSession)

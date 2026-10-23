@@ -15,6 +15,14 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.prefs.Preferences
 
+private data class DesktopConnectionTarget(
+    val relayUrl: String,
+    val token: String,
+    val key: ByteArray,
+    val workspaceId: String,
+    val hostId: String,
+)
+
 class DesktopRemoteBridge(
     private val http: HttpClient,
     private val token: String,
@@ -31,6 +39,9 @@ class DesktopRemoteBridge(
     private val pendingClears = ConcurrentHashMap.newKeySet<String>()
     private val autoApprovals = ConcurrentHashMap.newKeySet<String>()
     private var connection: EncryptedRelayConnection? = null
+    private var desiredConnection: DesktopConnectionTarget? = null
+    private var reconnectJob: Job? = null
+    private var closing = false
     private var targetHostId: String = defaultHostId
     private val deviceId = "desktop-${UUID.randomUUID().toString().take(8)}"
     override val state: StateFlow<RemoteBridgeState> = mutableState.asStateFlow()
@@ -55,26 +66,62 @@ class DesktopRemoteBridge(
         val effectiveWorkspaceId = if (workspaceId == "default") defaultWorkspaceId else workspaceId
         val effectiveToken = bearerToken?.takeIf(String::isNotBlank) ?: token
         val effectiveKey = keyBase64Url?.takeIf(String::isNotBlank)?.let { Base64.getUrlDecoder().decode(it) } ?: key
-        targetHostId = hostId ?: mutableState.value.hosts.singleOrNull()?.id ?: defaultHostId
+        closing = false
+        reconnectJob?.cancel()
+        reconnectJob = null
+        val target = DesktopConnectionTarget(
+            relayUrl = relayUrl,
+            token = effectiveToken,
+            key = effectiveKey,
+            workspaceId = effectiveWorkspaceId,
+            hostId = hostId ?: mutableState.value.hosts.singleOrNull()?.id ?: defaultHostId,
+        )
+        desiredConnection = target
+        connectTarget(target)
+    }
+
+    private fun connectTarget(target: DesktopConnectionTarget) {
+        if (connection != null || closing) return
+        targetHostId = target.hostId
         mutableState.update { it.copy(busy = true, error = null) }
         scope.launch {
             runCatching {
                 EncryptedRelayConnection(
-                    http, relayUrl, effectiveToken, deviceId, DevelopmentPresharedCipher(effectiveKey),
-                    workspaceId = effectiveWorkspaceId,
+                    http, target.relayUrl, target.token, deviceId, DevelopmentPresharedCipher(target.key),
+                    workspaceId = target.workspaceId,
                 ).also { it.connect() }
             }
                 .onSuccess { connected ->
                     connection = connected
-                    mutableState.update { it.copy(connected = true, busy = false, workspaceId = effectiveWorkspaceId, selectedHostId = targetHostId) }
+                    reconnectJob = null
+                    mutableState.update { it.copy(
+                        connected = true,
+                        busy = false,
+                        reconnecting = false,
+                        reconnectAttempt = 0,
+                        lastConnectedAtMillis = System.currentTimeMillis(),
+                        workspaceId = target.workspaceId,
+                        selectedHostId = targetHostId,
+                        error = null,
+                    ) }
                     scope.launch { collectIncoming(connected) }
                     migrateLocalTabs(connected)
                     connected.send(targetHostId, "control", BridgePayload.ListSavedTabs(UUID.randomUUID().toString()))
                     connected.send(targetHostId, "control", BridgePayload.ListAgents(UUID.randomUUID().toString()))
                     connected.send(targetHostId, "control", BridgePayload.ListDirectories(UUID.randomUUID().toString()))
                     connected.send(targetHostId, "control", BridgePayload.ListExternalSessions(UUID.randomUUID().toString()))
-                }.onFailure(::fail)
+                }.onFailure { failure ->
+                    fail(failure)
+                    if (mutableState.value.lastConnectedAtMillis != null) scheduleReconnect()
+                }
         }
+    }
+
+    override fun reconnectNow() {
+        if (connection != null || closing || desiredConnection == null) return
+        reconnectJob?.cancel()
+        reconnectJob = null
+        scheduleReconnect(immediate = true)
     }
 
     override fun startSession(workingDirectory: String, preferredAgentId: String?, title: String?) {
@@ -255,10 +302,13 @@ class DesktopRemoteBridge(
             mutableState.update { state -> state.copy(
                 connected = false,
                 busy = false,
+                reconnecting = !closing && desiredConnection != null,
+                lastDisconnectedAtMillis = System.currentTimeMillis(),
                 sessions = state.sessions.map { it.copy(sessionId = null, busy = false, closing = false, approvals = emptyList()) },
                 watchedExternalSession = null,
                 externalTranscript = "",
             ) }
+            if (!closing) scheduleReconnect()
         }
         failure?.let(::fail)
     }
@@ -414,8 +464,28 @@ class DesktopRemoteBridge(
         persistTabs(); syncTab(tabId)
         send(sessionId, BridgePayload.SendText(UUID.randomUUID().toString(), sessionId, text, UUID.randomUUID().toString()))
     }
+    private fun scheduleReconnect(immediate: Boolean = false) {
+        val target = desiredConnection ?: return
+        if (closing || connection != null || reconnectJob?.isActive == true) return
+        val attempt = mutableState.value.reconnectAttempt + 1
+        mutableState.update { it.copy(reconnecting = true, reconnectAttempt = attempt, busy = false) }
+        reconnectJob = scope.launch {
+            if (!immediate) delay(minOf(30_000L, 1_000L * (1L shl minOf(attempt - 1, 5))))
+            reconnectJob = null
+            connectTarget(target)
+        }
+    }
     private fun fail(failure: Throwable) = mutableState.update { it.copy(busy = false, error = failure.message?.take(240) ?: "Bridge connection failed") }
-    override fun close() { connection?.close(); connection = null; scope.cancel() }
+    override fun close() {
+        closing = true
+        reconnectJob?.cancel()
+        reconnectJob = null
+        desiredConnection = null
+        connection?.close()
+        connection = null
+        mutableState.update { it.copy(connected = false, reconnecting = false, busy = false) }
+        scope.cancel()
+    }
 
     private companion object {
         const val TABS_KEY = "saved_agent_tabs_v1"
