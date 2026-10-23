@@ -36,6 +36,35 @@ Agent Bridge отдельный поддомен, например `agents.resto
 корневой HTTPS URL без дополнительного пути, поэтому адрес вида
 `https://cdn.restorkava.ru/bridge` не подходит.
 
+### Если TCP 443 занят VPN REALITY
+
+Не переносите REALITY с 443 и не пытайтесь одновременно привязать Caddy к этому
+порту. Создайте в DNS отдельную A-запись `agents.restorkava.ru`, направленную на
+тот же VPS, и отключите для неё проксирование Cloudflare (режим **DNS only**).
+Agent Bridge поддерживает HTTPS URL с явным портом, поэтому Caddy можно запустить
+на TCP 8443:
+
+```caddyfile
+agents.restorkava.ru:8443 {
+    reverse_proxy 127.0.0.1:8787
+}
+```
+
+Откройте TCP 80 для получения TLS-сертификата и TCP 8443 для приложения, оставив
+VPN на TCP 443:
+
+```bash
+sudo ufw allow 80/tcp
+sudo ufw allow 8443/tcp
+sudo caddy validate --config /etc/caddy/Caddyfile
+sudo systemctl reload caddy
+curl https://agents.restorkava.ru:8443/health
+```
+
+В Desktop и Android используйте адрес `https://agents.restorkava.ru:8443`.
+Подключение работает и когда клиент использует VPN на этом же VPS: сервисы
+занимают разные порты, а все соединения Host и приложений остаются исходящими.
+
 ## 1. Загрузить пакет на VPS
 
 ### Вариант A: установить напрямую из GitHub
